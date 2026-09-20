@@ -1,31 +1,72 @@
 name: build-resume
-on: 
-  push: 
-    branches: [main]
 
-# Grants permissions for the workflow to deploy directly to GitHub Pages
+# push to main = test, build, audit, deploy. There is no other workflow.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege that still lets the deploy job publish to Pages.
 permissions:
   contents: read
   pages: write
   id-token: write
+
+# A second push supersedes an in-flight build instead of racing it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: 
+        with:
           python-version: '3.12'
-      - run: pip install pyyaml jinja2 && python build.py
-      
-      # This step uploads the "artifact" the error was asking for
-      - name: Upload artifact
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+      # PDF rendering shells out to the Chrome already on the runner rather
+      # than installing a headless-browser package. Resolve it up front so a
+      # changed runner image fails here with an obvious fix (add
+      # browser-actions/setup-chrome, or set CHROME_PATH) instead of failing
+      # inside the build step.
+      - name: Preflight — locate a browser for PDF rendering
+        run: |
+          python -c "import build, sys; p = build.find_browser(); print('browser:', p); sys.exit(0 if p else 1)"
+
+      # --check is the gate: it fails the build on unresolved [placeholders],
+      # filler phrases, non-linear section order, or incomplete dates in the
+      # extracted text layer. --pdf renders both PDFs, so the published site
+      # carries downloads named after the candidate.
+      - name: Build, audit, render PDFs
+        run: python build.py --check --pdf
+
+      # Dead links are worth knowing about but not worth blocking a deploy on:
+      # LinkedIn and friends rate-limit CI egress.
+      - name: Link audit (advisory)
+        continue-on-error: true
+        run: python build.py --links
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
   deploy:
+    # Pull requests get the gate, but only main publishes.
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

@@ -5,33 +5,47 @@
 # ██   ██ ███████ ███████  ██████  ██      ██ ███████
 #
 # Single source of truth for Arnav Mahadeshwar's resume.
-# Spec: JSON Resume (https://jsonresume.org/schema/) + two extensions:
-#   - work[].subsections: groups multiple projects under one employer
-#   - volunteer[] renders inside Experience, tagged (Volunteer, Part-Time)
+# Spec: JSON Resume (https://jsonresume.org/schema/) + three extensions
+# (all legal: the upstream schema sets additionalProperties: true)
 #
-# Build: python build.py  →  dist/index.html (terminal⇄macchiato) + dist/ats.html
-# Deploy: git push (GitHub Actions → GitHub Pages)
+#   work[].subsections : groups multiple projects under one employer, so a
+#                        parser counts one job instead of three
+#   engagements[]      : paid freelance / contract work, deliberately
+#                        undated — see the block comment above that section
+#   volunteer[]        : rendered INSIDE Experience, tagged
+#                        "(Volunteer, Part-Time)", so there is no orphan
+#                        one-item section on the page
 #
-# ⚠ TODO before first real submission:
-#   1. Rename GitHub account to arnav-mahadeshwar (old links redirect)
-#   2. Replace the two [bracketed placeholders] in MuddleArt highlights
-#   3. Update `url` in the resume-as-code project once the repo is public
+# Build:  python build.py          -> dist/{index.html,ats.html,resume.json,*.txt}
+# Verify: python build.py --check  (CI gate)  |  python build.py --links
+# Deploy: git push                 (GitHub Actions -> GitHub Pages)
+#
+# House rules for editing this file (the pipeline renders whatever you put
+# here — it cannot save you from a weak claim):
+#   1. Every number must be defensible in a 45-minute interview.
+#   2. Expand acronyms on first use. Keyword matchers are literal.
+#   3. No self-assigned skill levels.
+#   4. Outcomes, not activities. What changed for the business?
+#   5. No square-bracket drafts. `--check` fails the build on them.
 # ─────────────────────────────────────────────────────────────────────
 
 basics:
   name: "Arnav Mahadeshwar"
-  label: "Software Engineer — AI & Full-Stack"
+  label: "AI & ML Engineer"
   email: "amahadeshwar627@gmail.com"
   phone: "+91-9307837323"
-  url: "https://arnav-mahadeshwar.github.io"
+  # Project Pages, not User Pages — the bare github.io root 404s.
+  url: "https://arnav-mahadeshwar.github.io/resume"
   summary: >
-    Software engineer with 1.5+ years of experience building production systems
-    across artificial intelligence (AI), full-stack development, and cloud
-    infrastructure. Shipped Large Language Model (LLM)-powered workflows,
-    WhatsApp Business API integrations, and Continuous Integration/Continuous
-    Deployment (CI/CD) pipelines at a FinTech serving 100K+ customers and a
-    textile-recycling startup operating 6 factory units. Strengths: Python,
-    TypeScript, Next.js, AWS, Docker, and applied Machine Learning (ML).
+    Artificial Intelligence (AI) and Machine Learning (ML) engineer with 1+
+    year of professional experience shipping production systems across applied
+    AI, full-stack development, and cloud infrastructure. Built AI underwriting
+    and automated deployment infrastructure at a Non-Banking Financial Company
+    (NBFC) serving 100K+ customers, then delivered a six-site operations
+    platform end-to-end as the sole engineer on a freelance contract.
+    Strengths: Python, TypeScript, Next.js, Amazon Web Services (AWS), Docker,
+    Continuous Integration/Continuous Deployment (CI/CD), and Large Language
+    Model (LLM) application design.
   location:
     city: "Pune"
     countryCode: "IN"
@@ -44,37 +58,14 @@ basics:
       username: "arnav-mahadeshwar"
       url: "https://github.com/arnav-mahadeshwar"
 
+# ─────────────────────────────────────────────────────────────────────
+# WORK — salaried employment only. One entry, and that is the honest
+# number; freelance contracts live in `engagements` below so a recruiter
+# never has to guess which is which.
+# ─────────────────────────────────────────────────────────────────────
 work:
-  - name: "MuddleArt Private Limited"
-    position: "Full-Stack Developer (freelance)"
-    location: "Pune, India (Remote)"
-    startDate: "2026-04-01"
-    endDate: "2026-07-10"
-    summary: >
-      Sole engineer for India's first formal, tech-enabled pre-consumer textile
-      waste recycler operating 6 factory units across Gujarat, Delhi, and
-      Uttar Pradesh.
-    highlights:
-      - >-
-        Architected a serverless backend (Google Apps Script) with a webhook
-        gateway, role-based dispatch engine, and scheduled cron jobs
-        orchestrating daily logistics across 6 factory units, eliminating
-        10+ hours/week of manual coordination
-      - >-
-        Integrated Meta WhatsApp Business API for interactive button-based
-        approvals and template messaging across 4 operational teams (logistics,
-        transport, bags, labour), processing 100+ messages per month
-      - >-
-        Built the Next.js partner portal (Tailwind CSS, TanStack Query,
-        Chart.js) with a token-gated live dashboard, material breakdown, and
-        collective impact tracking
-      - >-
-        Engineered a 3-stage data pipeline (Staging → Confirmation → Master
-        Ledger) with nightly archival and automated environmental impact
-        reporting (CO2 avoided, water saved, employment generated)
-
   - name: "Poonawalla Fincorp"
-    position: "AI & ML Engineering Intern"
+    position: "AI & ML Engineer"
     location: "Pune, India"
     url: "https://www.poonawallafincorp.com"
     startDate: "2025-08-01"
@@ -96,16 +87,15 @@ work:
             configuration, reducing manual deployment overhead by 70%
           - >-
             Authored Shell automation scripts syncing bulk data migrations
-            between UAT and Production environments on AWS S3 (50GB+ per
-            cycle), cutting operational latency by 90%
+            between User Acceptance Testing (UAT) and Production environments
+            on AWS S3 (50GB+ per cycle), cutting operational latency by 90%
           - >-
             Collaborated with underwriting teams to launch an Educational Loan
             product through rapid iterative testing over a 3-month production
             track
           - >-
             Provisioned and managed Linux virtual machine (VM) environments
-            supporting User Acceptance Testing (UAT) for 3 concurrent
-            workstreams
+            supporting UAT for 3 concurrent workstreams
       - name: "Saarthi A.I. — Cohort Analytics & Chatbot"
         keywords:
           - "Red Hat Linux"
@@ -123,6 +113,69 @@ work:
             profiles to generate data-lifecycle insights for executive
             leadership
 
+# ─────────────────────────────────────────────────────────────────────
+# ENGAGEMENTS — paid freelance / contract delivery.
+#
+# Why this section exists and why it has no dates:
+#   Contract work is scoped by deliverable, not by tenure. A date range on a
+#   3-month contract invites the wrong question ("why did it end?") instead
+#   of the right one ("what did you ship, and is it still running?"). So each
+#   entry answers the four things a hiring manager actually asks about
+#   freelance work:
+#     capacity  — who else was on it? (ownership / seniority signal)
+#     mandate   — what problem were you hired to solve? (product judgement)
+#     highlights— what did you build? (technical depth)
+#     outcome   — is it live, and who depends on it? (finishing power)
+#   `duration` and `status` carry scope and recency without a range.
+#
+# Field reference (all optional except client, role, highlights):
+#   client, role, url, clientProfile, capacity, duration, status,
+#   mandate, keywords, highlights, outcome
+#
+# To add another contract, copy the block below. Keep highlights to 4.
+# ─────────────────────────────────────────────────────────────────────
+engagements:
+  - client: "MuddleArt Private Limited"
+    role: "Full-Stack Engineer (Independent Contract)"
+    clientProfile: >
+      India's first formal, tech-enabled pre-consumer textile waste recycler,
+      operating 6 factory units across Gujarat, Delhi, and Uttar Pradesh.
+    capacity: "Sole engineer — architecture through production handover"
+    duration: "3-month engagement"
+    status: "Delivered; running in production"
+    mandate: >
+      Replace manual coordination with one system of record for daily material
+      dispatch, multi-team approvals, and partner-facing impact reporting.
+    keywords:
+      - "Next.js"
+      - "Google Apps Script"
+      - "WhatsApp Business API"
+      - "Tailwind CSS"
+      - "TanStack Query"
+      - "Chart.js"
+    highlights:
+      - >-
+        Architected a serverless backend (Google Apps Script) with a webhook
+        gateway, role-based dispatch engine, and scheduled cron jobs
+        orchestrating daily logistics across 6 factory units, eliminating
+        10+ hours/week of manual coordination
+      - >-
+        Integrated Meta WhatsApp Business API for interactive button-based
+        approvals and template messaging across 4 operational teams (logistics,
+        transport, bags, labour), processing 100+ messages per month
+      - >-
+        Built the Next.js partner portal (Tailwind CSS, TanStack Query,
+        Chart.js) with a token-gated live dashboard, material breakdown, and
+        collective impact tracking
+      - >-
+        Engineered a 3-stage data pipeline (Staging → Confirmation → Master
+        Ledger) with nightly archival and automated environmental impact
+        reporting (carbon dioxide avoided, water saved, employment generated)
+    outcome: >
+      Handed over documented and operational as the client's daily source of
+      truth for dispatch, with the impact dashboard live for partners.
+
+# Rendered inside Experience, tagged "(Volunteer, Part-Time)".
 volunteer:
   - organization: "D.O.R.A.I Foundation"
     url: "https://dorai-website.vercel.app/"
@@ -139,7 +192,8 @@ volunteer:
 
 projects:
   - name: "OmniForge 5E — Real-Time D&D Companion Platform"
-    url: "https://github.com/arnav-mahadeshwar/omniforge-5e"
+    # url intentionally omitted: the repository is private, and `--links`
+    # fails the build on a 404. Restore it the day it goes public.
     startDate: "2026-03-01"
     keywords:
       - "Next.js 14"
@@ -157,7 +211,7 @@ projects:
         computing armor class, saves, and skill modifiers in real time
       - >-
         Implemented an admin ingestion pipeline for spells, monsters, items,
-        and class data via JSON
+        and class data via JavaScript Object Notation (JSON)
 
   - name: "Resume-as-Code — This Resume's Build Pipeline"
     url: "https://github.com/arnav-mahadeshwar/resume"
@@ -171,16 +225,20 @@ projects:
       - "CI/CD"
     highlights:
       - >-
-        Built the pipeline that generates this document: a single resume.yaml
-        source of truth compiled by Python/Jinja2 into two render targets — an
-        interactive terminal-themed web resume and an ATS-optimized print
-        document — deployed automatically to GitHub Pages on every git push
+        Built the pipeline that generates this document: one resume.yaml source
+        of truth compiled by Python and Jinja2 into four artifacts — an
+        interactive web resume, an Applicant Tracking System (ATS)-optimized
+        print document, print-ready Portable Document Format (PDF) files, and a
+        JSON Resume export — deployed to GitHub Pages on every git push
       - >-
-        Engineered a dual-face stylesheet where one DOM renders as a dark
-        terminal UI on screen and re-flows into a two-column print layout via
-        CSS display:contents and flexbox ordering, with a text layer verified
-        against ATS parsing (linear extraction order, complete dates, zero
-        clipping)
+        Engineered a dual-face stylesheet where one Document Object Model (DOM)
+        renders as a dark terminal interface on screen and re-flows into a
+        two-column print document, with no duplicated content and one line of
+        JavaScript
+      - >-
+        Gated the build on an automated ATS contract: Continuous Integration
+        asserts the extracted text layer stays linear, dates stay complete, and
+        no draft placeholder or dead link can reach a recruiter
 
   - name: "AI-Driven Speech Therapy Platform"
     startDate: "2025-01-01"
@@ -196,8 +254,8 @@ projects:
         learners, driving a 30% improvement in measured pronunciation outcomes
       - >-
         Implemented Sequence-to-Sequence (Seq2Seq) models with Bidirectional
-        LSTM (BiLSTM) and attention mechanisms to classify phonetic errors at
-        87% accuracy
+        Long Short-Term Memory (BiLSTM) and attention mechanisms to classify
+        phonetic errors at 87% accuracy
       - >-
         Integrated Gemini LLM to generate personalized practice material
         targeting each user's error profile
@@ -219,20 +277,13 @@ publications:
       performance for spatial robotics and autonomous vehicle applications.
 
 skills:
-  - name: "Languages"
+  - name: "Programming Languages"
     keywords:
       - "Python"
       - "TypeScript"
       - "JavaScript"
       - "SQL"
       - "Bash"
-  - name: "Frontend"
-    keywords:
-      - "React"
-      - "Next.js"
-      - "Tailwind CSS"
-      - "TanStack Query"
-      - "HTML5 / CSS3"
   - name: "AI & ML"
     keywords:
       - "Large Language Models (LLMs)"
@@ -251,6 +302,13 @@ skills:
       - "Linux Administration"
       - "Git / GitHub"
       - "Google Cloud Platform (GCP)"
+  - name: "Frontend"
+    keywords:
+      - "React"
+      - "Next.js"
+      - "Tailwind CSS"
+      - "TanStack Query"
+      - "HTML5 / CSS3"
   - name: "Data & Backend"
     keywords:
       - "PostgreSQL"

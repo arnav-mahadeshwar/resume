@@ -1,0 +1,272 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json",
+  "basics": {
+    "name": "Arnav Mahadeshwar",
+    "label": "AI & ML Engineer",
+    "email": "amahadeshwar627@gmail.com",
+    "phone": "+91-9307837323",
+    "url": "https://arnav-mahadeshwar.github.io/resume",
+    "summary": "Artificial Intelligence (AI) and Machine Learning (ML) engineer with 1+ year of professional experience shipping production systems across applied AI, full-stack development, and cloud infrastructure. Built AI underwriting and automated deployment infrastructure at a Non-Banking Financial Company (NBFC) serving 100K+ customers, then delivered a six-site operations platform end-to-end as the sole engineer on a freelance contract. Strengths: Python, TypeScript, Next.js, Amazon Web Services (AWS), Docker, Continuous Integration/Continuous Deployment (CI/CD), and Large Language Model (LLM) application design.\n",
+    "location": {
+      "city": "Pune",
+      "countryCode": "IN",
+      "region": "Maharashtra"
+    },
+    "profiles": [
+      {
+        "network": "LinkedIn",
+        "username": "Arnav Mahadeshwar",
+        "url": "https://www.linkedin.com/in/arnav-bala/"
+      },
+      {
+        "network": "GitHub",
+        "username": "arnav-mahadeshwar",
+        "url": "https://github.com/arnav-mahadeshwar"
+      }
+    ]
+  },
+  "work": [
+    {
+      "name": "Poonawalla Fincorp",
+      "position": "AI & ML Engineer",
+      "location": "Pune, India",
+      "url": "https://www.poonawallafincorp.com",
+      "startDate": "2025-08-01",
+      "endDate": "2026-02-04",
+      "summary": "Built AI-driven underwriting infrastructure and automated testing pipelines for the Credit A.I. and Saarthi A.I. platforms at a Non-Banking Financial Company (NBFC) serving 100K+ customers.\n",
+      "highlights": [
+        "Credit A.I. — AI Underwriting Platform: Deployed end-to-end CI/CD pipelines using Docker and YAML configuration, reducing manual deployment overhead by 70%",
+        "Credit A.I. — AI Underwriting Platform: Authored Shell automation scripts syncing bulk data migrations between User Acceptance Testing (UAT) and Production environments on AWS S3 (50GB+ per cycle), cutting operational latency by 90%",
+        "Credit A.I. — AI Underwriting Platform: Collaborated with underwriting teams to launch an Educational Loan product through rapid iterative testing over a 3-month production track",
+        "Credit A.I. — AI Underwriting Platform: Provisioned and managed Linux virtual machine (VM) environments supporting UAT for 3 concurrent workstreams",
+        "Saarthi A.I. — Cohort Analytics & Chatbot: Served as infrastructure single point of contact (SPOC) for Red Hat Linux, resolving VM resource constraints to maintain 99% uptime",
+        "Saarthi A.I. — Cohort Analytics & Chatbot: Architected cohort analysis pipelines correlating customer bounce rates with population density metrics for product teams",
+        "Saarthi A.I. — Cohort Analytics & Chatbot: Built log extraction routines parsing 500+ historical customer profiles to generate data-lifecycle insights for executive leadership"
+      ],
+      "x_subsections": [
+        {
+          "name": "Credit A.I. — AI Underwriting Platform",
+          "keywords": [
+            "AWS S3",
+            "AWS Textract",
+            "Docker",
+            "CI/CD"
+          ],
+          "highlights": [
+            "Deployed end-to-end CI/CD pipelines using Docker and YAML configuration, reducing manual deployment overhead by 70%",
+            "Authored Shell automation scripts syncing bulk data migrations between User Acceptance Testing (UAT) and Production environments on AWS S3 (50GB+ per cycle), cutting operational latency by 90%",
+            "Collaborated with underwriting teams to launch an Educational Loan product through rapid iterative testing over a 3-month production track",
+            "Provisioned and managed Linux virtual machine (VM) environments supporting UAT for 3 concurrent workstreams"
+          ]
+        },
+        {
+          "name": "Saarthi A.I. — Cohort Analytics & Chatbot",
+          "keywords": [
+            "Red Hat Linux",
+            "Cohort Analysis",
+            "API Security"
+          ],
+          "highlights": [
+            "Served as infrastructure single point of contact (SPOC) for Red Hat Linux, resolving VM resource constraints to maintain 99% uptime",
+            "Architected cohort analysis pipelines correlating customer bounce rates with population density metrics for product teams",
+            "Built log extraction routines parsing 500+ historical customer profiles to generate data-lifecycle insights for executive leadership"
+          ]
+        }
+      ]
+    }
+  ],
+  "volunteer": [
+    {
+      "organization": "D.O.R.A.I Foundation",
+      "position": "Digital Infrastructure Lead",
+      "url": "https://dorai-website.vercel.app/",
+      "startDate": "2026-02-01",
+      "highlights": [
+        "Led end-to-end migration of a legacy Zoho site to Astro and Tailwind CSS, improving performance for 1K+ monthly visitors",
+        "Engineered Python-based scraping agents with LLM-assisted (DeepSeek) workflows to extract and migrate structured content across 46 source maps"
+      ],
+      "x_tag": "Volunteer, Part-Time"
+    }
+  ],
+  "projects": [
+    {
+      "name": "MuddleArt Private Limited",
+      "entity": "MuddleArt Private Limited",
+      "type": "freelance engagement",
+      "roles": [
+        "Full-Stack Engineer (Independent Contract)"
+      ],
+      "description": "India's first formal, tech-enabled pre-consumer textile waste recycler, operating 6 factory units across Gujarat, Delhi, and Uttar Pradesh. Replace manual coordination with one system of record for daily material dispatch, multi-team approvals, and partner-facing impact reporting.",
+      "highlights": [
+        "Architected a serverless backend (Google Apps Script) with a webhook gateway, role-based dispatch engine, and scheduled cron jobs orchestrating daily logistics across 6 factory units, eliminating 10+ hours/week of manual coordination",
+        "Integrated Meta WhatsApp Business API for interactive button-based approvals and template messaging across 4 operational teams (logistics, transport, bags, labour), processing 100+ messages per month",
+        "Built the Next.js partner portal (Tailwind CSS, TanStack Query, Chart.js) with a token-gated live dashboard, material breakdown, and collective impact tracking",
+        "Engineered a 3-stage data pipeline (Staging → Confirmation → Master Ledger) with nightly archival and automated environmental impact reporting (carbon dioxide avoided, water saved, employment generated)",
+        "Outcome: Handed over documented and operational as the client's daily source of truth for dispatch, with the impact dashboard live for partners."
+      ],
+      "keywords": [
+        "Next.js",
+        "Google Apps Script",
+        "WhatsApp Business API",
+        "Tailwind CSS",
+        "TanStack Query",
+        "Chart.js"
+      ],
+      "x_capacity": "Sole engineer — architecture through production handover",
+      "x_duration": "3-month engagement",
+      "x_status": "Delivered; running in production"
+    },
+    {
+      "name": "OmniForge 5E — Real-Time D&D Companion Platform",
+      "startDate": "2026-03-01",
+      "keywords": [
+        "Next.js 14",
+        "Supabase",
+        "PostgreSQL",
+        "TypeScript",
+        "WebSockets"
+      ],
+      "highlights": [
+        "Designed a multi-tenant PostgreSQL schema (9+ migrations) with full Row-Level Security (RLS) for campaigns, compendium, and character data",
+        "Built a 29-rule parser engine extracting structured automation hooks from unstructured rules text, plus an active-effect dependency graph computing armor class, saves, and skill modifiers in real time",
+        "Implemented an admin ingestion pipeline for spells, monsters, items, and class data via JavaScript Object Notation (JSON)"
+      ],
+      "type": "personal project"
+    },
+    {
+      "name": "Resume-as-Code — This Resume's Build Pipeline",
+      "url": "https://github.com/arnav-mahadeshwar/resume",
+      "startDate": "2026-07-01",
+      "keywords": [
+        "Python",
+        "Jinja2",
+        "YAML",
+        "CSS @media print",
+        "GitHub Actions",
+        "CI/CD"
+      ],
+      "highlights": [
+        "Built the pipeline that generates this document: one resume.yaml source of truth compiled by Python and Jinja2 into four artifacts — an interactive web resume, an Applicant Tracking System (ATS)-optimized print document, print-ready Portable Document Format (PDF) files, and a JSON Resume export — deployed to GitHub Pages on every git push",
+        "Engineered a dual-face stylesheet where one Document Object Model (DOM) renders as a dark terminal interface on screen and re-flows into a two-column print document, with no duplicated content and one line of JavaScript",
+        "Gated the build on an automated ATS contract: Continuous Integration asserts the extracted text layer stays linear, dates stay complete, and no draft placeholder or dead link can reach a recruiter"
+      ],
+      "type": "personal project"
+    },
+    {
+      "name": "AI-Driven Speech Therapy Platform",
+      "startDate": "2025-01-01",
+      "endDate": "2025-06-01",
+      "keywords": [
+        "Seq2Seq",
+        "BiLSTM + Attention",
+        "Gemini API",
+        "MFCC / Log-Mel"
+      ],
+      "highlights": [
+        "Engineered automated speech articulation analysis used by 200+ language learners, driving a 30% improvement in measured pronunciation outcomes",
+        "Implemented Sequence-to-Sequence (Seq2Seq) models with Bidirectional Long Short-Term Memory (BiLSTM) and attention mechanisms to classify phonetic errors at 87% accuracy",
+        "Integrated Gemini LLM to generate personalized practice material targeting each user's error profile"
+      ],
+      "type": "personal project"
+    }
+  ],
+  "education": [
+    {
+      "institution": "SRM Institute of Science and Technology",
+      "area": "Computer Science — AI & Machine Learning Specialization",
+      "studyType": "Bachelor of Technology (B.Tech)",
+      "startDate": "2021-06-01",
+      "endDate": "2025-06-01",
+      "score": "8.0 / 10.0"
+    }
+  ],
+  "publications": [
+    {
+      "name": "Computer Vision Module Application for Finding a Target in a Live Camera",
+      "publisher": "SSRN Elsevier Conference Proceedings",
+      "releaseDate": "2024-11-01",
+      "summary": "Real-time target detection in dynamic environments, evaluating performance for spatial robotics and autonomous vehicle applications.\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "Programming Languages",
+      "keywords": [
+        "Python",
+        "TypeScript",
+        "JavaScript",
+        "SQL",
+        "Bash"
+      ]
+    },
+    {
+      "name": "AI & ML",
+      "keywords": [
+        "Large Language Models (LLMs)",
+        "Retrieval-Augmented Generation (RAG)",
+        "LangGraph",
+        "n8n",
+        "PyTorch",
+        "TensorFlow",
+        "Natural Language Processing (NLP)",
+        "Computer Vision"
+      ]
+    },
+    {
+      "name": "Cloud & DevOps",
+      "keywords": [
+        "AWS (S3, EC2, Textract, Secrets Manager)",
+        "Docker",
+        "CI/CD Pipelines",
+        "Linux Administration",
+        "Git / GitHub",
+        "Google Cloud Platform (GCP)"
+      ]
+    },
+    {
+      "name": "Frontend",
+      "keywords": [
+        "React",
+        "Next.js",
+        "Tailwind CSS",
+        "TanStack Query",
+        "HTML5 / CSS3"
+      ]
+    },
+    {
+      "name": "Data & Backend",
+      "keywords": [
+        "PostgreSQL",
+        "Supabase",
+        "REST APIs",
+        "Google Apps Script",
+        "WhatsApp Business API"
+      ]
+    }
+  ],
+  "languages": [
+    {
+      "language": "English",
+      "fluency": "Professional"
+    },
+    {
+      "language": "Hindi",
+      "fluency": "Native"
+    },
+    {
+      "language": "Marathi",
+      "fluency": "Native"
+    },
+    {
+      "language": "Japanese",
+      "fluency": "JLPT N4 Certified"
+    }
+  ],
+  "meta": {
+    "canonical": "https://arnav-mahadeshwar.github.io/resume/resume.json",
+    "version": "v1.0.0",
+    "lastModified": "2026-09-20T12:17:17+00:00",
+    "generator": "resume-as-code v4 (build.py)",
+    "x_note": "engagements[] are paid contracts, exported as projects[] with type='freelance engagement'; volunteer[] renders inside Experience tagged 'Volunteer, Part-Time'."
+  }
+}

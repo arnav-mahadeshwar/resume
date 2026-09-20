@@ -1,0 +1,6 @@
+# Two runtime dependencies, pinned. Nothing else — no framework, no
+# headless-browser package (PDF rendering shells out to the Chrome/Edge that
+# is already on the machine), no test framework (the suite is stdlib
+# unittest, so `python -m unittest` works on a clean checkout).
+PyYAML==6.0.3
+Jinja2==3.1.6

@@ -1,75 +1,95 @@
-
 #!/usr/bin/env python3
 """
-resume build pipeline v3 — resume.yaml -> dist/index.html + dist/ats.html
-===========================================================================
-Usage:
-    pip install pyyaml jinja2
-    python build.py                # build both targets into ./dist
-    python build.py --only ats     # single target (ats | hybrid)
-    python build.py --check        # build + lint; exit 1 on placeholders
-                                   #   (use this in CI)
+resume build pipeline v4 — resume.yaml -> dist/
+==============================================================================
+One source of truth, four artifact kinds, one ATS contract enforced in CI.
 
-v3 changes (full audit):
-  BUGS FIXED
-  - Country name derived from basics.location.countryCode (was hardcoded)
-  - Both targets print A4 (was A4/Letter mismatch)
-  - Bullets can no longer split across page breaks (li break-inside)
-  - Nav includes Volunteer; anchor targets get scroll-margin-top
-  - Removed .wrap bottom padding that fought @page bottom margin
-  PRINT FRAGMENTATION (consolidated)
-  - .keep wrappers bind section headings to their first card
-  - Sidebar sections are atomic units; h2 break-after belt-and-braces
-  - @page vertical margins give continuation pages breathing room
-  - orphans/widows control on flowing text
-  ROBUSTNESS
-  - Content linter: flags [bracketed placeholders] and TODOs in output;
-    --check makes it a CI gate
-  - Schema validation with human-readable errors
-  - Date parsing errors report the offending value and context
-  POLISH
-  - Dual-span skill titles (snake_case screen / proper-case print)
-  - Lato italic 300/700 faces restored (theme fidelity)
-  - prefers-reduced-motion support on the screen face
-  - Meta description + generator comment in output
+Usage
+-----
+    pip install -r requirements.txt
 
-Schema: JSON Resume (https://jsonresume.org/schema/) + extensions:
-  work[].subsections: [{name, keywords, highlights}]  # projects per employer
-  volunteer[]: rendered as its own section in both targets
+    python build.py                  # build every target into ./dist
+    python build.py --only ats       # single HTML target (ats | hybrid)
+    python build.py --check          # build + audit; exit 1 on any finding
+                                     #   (this is the CI gate)
+    python build.py --pdf            # also render PDFs via headless Chrome
+    python build.py --links          # audit every URL on the resume (network)
 
-CI (GitHub Actions), .github/workflows/deploy.yml:
-  ---------------------------------------------------------------
-  name: build-resume
-  on: { push: { branches: [main] } }
-  jobs:
-    build:
-      runs-on: ubuntu-latest
-      permissions: { contents: write }
-      steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-python@v5
-          with: { python-version: '3.12' }
-        - run: pip install pyyaml jinja2
-        - run: python build.py --check     # fails on leftover placeholders
-        - uses: peaceiris/actions-gh-pages@v4
-          with:
-            github_token: ${{ secrets.GITHUB_TOKEN }}
-            publish_dir: ./dist
-  ---------------------------------------------------------------
+Outputs (./dist)
+----------------
+    index.html   the shapeshifter — terminal UI on screen, two-column
+                 "macchiato" document on print. One DOM, no duplicated
+                 content, one line of JavaScript.
+    ats.html     the guarantee — strictly single-column, standard headers.
+                 This is the file that goes to application portals.
+    index.txt    the text layer each document yields when a parser extracts
+    ats.txt      it: screen-only chrome dropped, block elements newline-
+                 separated. This is the Ctrl+A / Ctrl+C test, automated and
+                 committed, so a regression is a diff instead of a surprise.
+    resume.json  JSON Resume export (schema v1.0.0) so the same content works
+                 with the wider jsonresume ecosystem instead of only here.
+    <Name>-Resume.pdf / <Name>-Resume-ATS.pdf   with --pdf. Named after the
+                 candidate, because that is what a recruiter searches for.
+
+The ATS contract (audit_text_layer)
+-----------------------------------
+--check fails the build when the extracted text layer stops being a valid
+linear resume, not merely when the HTML stops rendering:
+    * no unresolved [bracketed] drafts, TODO/FIXME markers, or filler verbs
+    * name, phone and email inside the first few lines (identity parses first)
+    * section headings in linear order
+    * one complete written date range per dated entry ("August 2025 – February
+      2026"), and zero numeric "04/2026" forms — the shape that historically
+      got clipped to "04/2026 - P" inside the PDF text layer
+Nothing here depends on how the PDF was produced, so it holds for both
+browser print-to-PDF and the headless renderer.
+
+Schema
+------
+JSON Resume (https://jsonresume.org/schema/) plus three extensions; the
+upstream schema sets additionalProperties: true, so all three stay valid:
+    work[].subsections  projects grouped under one employer
+    engagements[]       paid freelance/contract work, deliberately undated
+    volunteer[]         rendered inside Experience, tagged "(Volunteer,
+                        Part-Time)" — never an orphan section
+resume.json maps engagements onto JSON Resume's projects[] using its own
+entity/roles/type fields, which exist for exactly this case.
+
+CI
+--
+.github/workflows/deploy.yml: install pinned deps, run the unit tests, run
+`python build.py --check --pdf`, upload ./dist as the Pages artifact, deploy.
+Console output is ASCII when the terminal cannot encode box glyphs, so the
+same commands work on a cp1252 Windows shell.
 """
 import argparse
 import datetime
+import json
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+from html.parser import HTMLParser
 
 try:
     import yaml
-    from jinja2 import Environment, BaseLoader
-except ImportError:
-    sys.exit("Missing deps. Run: pip install pyyaml jinja2")
+    from jinja2 import Environment, FileSystemLoader
+except ImportError:  # pragma: no cover - environment problem, not logic
+    sys.exit("Missing deps. Run: pip install -r requirements.txt")
 
-GENERATOR = "resume-as-code v3 (build.py)"
+ROOT = pathlib.Path(__file__).resolve().parent
+TEMPLATE_DIR = ROOT / "templates"
+
+GENERATOR = "resume-as-code v4 (build.py)"
+SCHEMA_URL = ("https://raw.githubusercontent.com/jsonresume/resume-schema/"
+              "v1.0.0/schema.json")
+
+# Section naming lives here so the templates, the JSON export and the audit
+# can never disagree about what a section is called.
+ENGAGEMENTS_HEADING = "Freelance & Contract Experience"
+VOLUNTEER_TAG = "Volunteer, Part-Time"
 
 COUNTRY_NAMES = {
     "IN": "India", "US": "United States", "GB": "United Kingdom",
@@ -77,7 +97,51 @@ COUNTRY_NAMES = {
     "CA": "Canada", "AU": "Australia", "NL": "Netherlands",
 }
 
-# ---------------------------------------------------------------- helpers
+TARGETS = {
+    "hybrid": ("index.html", "index.html.j2", "index.txt"),
+    "ats": ("ats.html", "ats.html.j2", "ats.txt"),
+}
+PDF_SUFFIX = {"hybrid": "Resume", "ats": "Resume-ATS"}
+
+def pdf_names(data):
+    """`Arnav-Mahadeshwar-Resume.pdf`, not `resume.pdf`.
+
+    The filename is the first thing a recruiter sees in their downloads folder
+    and the last thing they search for three weeks later, so it carries the
+    candidate's name rather than the build system's.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", data["basics"]["name"]).strip("-")
+    return {t: f"{slug}-{suffix}.pdf" for t, suffix in PDF_SUFFIX.items()}
+
+# --------------------------------------------------------------- console
+# A resume pipeline that only prints on UTF-8 terminals is a resume pipeline
+# half its readers cannot run. Pick glyphs the stream can actually encode.
+
+def _encodable(text, stream=None):
+    enc = getattr(stream or sys.stdout, "encoding", None) or "ascii"
+    try:
+        text.encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+OK = "\u2713" if _encodable("\u2713") else "[ok]"
+WARN = "\u26a0" if _encodable("\u26a0") else "[!]"
+DASH = "\u2192" if _encodable("\u2192") else "->"
+
+def say(*parts):
+    """print() that degrades instead of raising UnicodeEncodeError."""
+    msg = " ".join(str(p) for p in parts)
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(msg.encode(enc, "replace").decode(enc, "replace"))
+
+# --------------------------------------------------------------- helpers
+
+MONTHS = ("January February March April May June July August September "
+          "October November December").split()
 
 def fmt_date(iso, default="Present"):
     if not iso:
@@ -85,506 +149,513 @@ def fmt_date(iso, default="Present"):
     try:
         d = datetime.date.fromisoformat(str(iso)[:10])
     except ValueError:
-        sys.exit(f"resume.yaml: unparseable date {iso!r} — expected YYYY-MM-DD")
-    return d.strftime("%B %Y")
+        sys.exit(f"resume.yaml: unparseable date {iso!r} - expected YYYY-MM-DD")
+    return f"{MONTHS[d.month - 1]} {d.year}"
 
 def daterange(item):
-    return f"{fmt_date(item.get('startDate'))} – {fmt_date(item.get('endDate'))}"
+    return f"{fmt_date(item.get('startDate'))} \u2013 {fmt_date(item.get('endDate'))}"
 
 def country_name(code):
     return COUNTRY_NAMES.get(str(code).upper(), str(code))
 
-def env():
-    e = Environment(loader=BaseLoader(), autoescape=True,
+def jinja_env(template_dir=TEMPLATE_DIR):
+    # Default (non-strict) Undefined on purpose: optional schema keys such as
+    # engagements[].outcome are tested for truthiness in the templates, and
+    # required keys are already guaranteed by validate() with better messages
+    # than any Jinja traceback.
+    e = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True,
                     trim_blocks=True, lstrip_blocks=True)
     e.filters["daterange"] = daterange
     e.filters["fmtdate"] = fmt_date
     e.filters["country"] = country_name
     return e
 
-# ---------------------------------------------------------------- validation
+def _first(profiles, network):
+    for p in profiles or []:
+        if (p.get("network") or "").lower() == network.lower():
+            return p
+    return None
+
+def context(data):
+    """Everything the templates need, computed in Python, not in Jinja."""
+    b = data["basics"]
+    loc = b["location"]
+    gh = _first(b.get("profiles"), "GitHub")
+    return {
+        "r": data,
+        "b": b,
+        "gh": gh,
+        "li": _first(b.get("profiles"), "LinkedIn"),
+        "loc": f"{loc['city']}, {loc['region']}, {country_name(loc['countryCode'])}",
+        "generator": GENERATOR,
+        "engagements_heading": ENGAGEMENTS_HEADING,
+        "volunteer_tag": VOLUNTEER_TAG,
+        "pdf_name": pdf_names(data)["hybrid"],
+        "ats_name": TARGETS["ats"][0],
+        "source_url": (f"{gh['url']}/resume/blob/main/resume.yaml" if gh
+                       else "https://jsonresume.org/schema/"),
+    }
+
+# --------------------------------------------------------------- validation
 
 def validate(r):
     """Fail fast with readable errors instead of Jinja stack traces."""
     errors = []
     b = r.get("basics") or {}
-    for key in ("name", "label", "email", "phone", "summary", "location"):
+    for key in ("name", "label", "email", "phone", "summary", "location", "url"):
         if not b.get(key):
             errors.append(f"basics.{key} is missing")
-    if b.get("location") and not b["location"].get("countryCode"):
-        errors.append("basics.location.countryCode is missing")
+    for key in ("city", "region", "countryCode"):
+        if not (b.get("location") or {}).get(key):
+            errors.append(f"basics.location.{key} is missing")
+    if len((b.get("name") or "").split()) < 2:
+        errors.append("basics.name needs at least two words (the header splits it)")
+
+    if not r.get("work"):
+        errors.append("work section is empty")
     for i, w in enumerate(r.get("work") or []):
+        who = w.get("name", "?")
         for key in ("name", "position", "startDate"):
             if not w.get(key):
-                errors.append(f"work[{i}] ({w.get('name','?')}): {key} missing")
+                errors.append(f"work[{i}] ({who}): {key} missing")
         if not w.get("highlights") and not w.get("subsections"):
-            errors.append(f"work[{i}] ({w.get('name','?')}): no highlights or subsections")
+            errors.append(f"work[{i}] ({who}): no highlights or subsections")
+        for j, sub in enumerate(w.get("subsections") or []):
+            if not sub.get("name") or not sub.get("highlights"):
+                errors.append(f"work[{i}].subsections[{j}]: needs name + highlights")
+
+    for i, en in enumerate(r.get("engagements") or []):
+        who = en.get("client", "?")
+        for key in ("client", "role", "highlights"):
+            if not en.get(key):
+                errors.append(f"engagements[{i}] ({who}): {key} missing")
+        for banned in ("startDate", "endDate"):
+            if en.get(banned):
+                errors.append(
+                    f"engagements[{i}] ({who}): {banned} is not allowed - "
+                    "contract work is scoped by deliverable, not tenure; "
+                    "use `duration` (e.g. \"3-month engagement\")")
+
+    for i, v in enumerate(r.get("volunteer") or []):
+        for key in ("organization", "position", "startDate", "highlights"):
+            if not v.get(key):
+                errors.append(f"volunteer[{i}] ({v.get('organization','?')}): {key} missing")
+
+    for i, p in enumerate(r.get("projects") or []):
+        for key in ("name", "highlights", "startDate"):
+            if not p.get(key):
+                errors.append(f"projects[{i}] ({p.get('name','?')}): {key} missing")
+
+    for i, e in enumerate(r.get("education") or []):
+        for key in ("institution", "area", "studyType", "startDate", "score"):
+            if not e.get(key):
+                errors.append(f"education[{i}]: {key} missing")
+
     if not r.get("skills"):
         errors.append("skills section is empty")
     if not r.get("education"):
         errors.append("education section is empty")
+    if not r.get("languages"):
+        errors.append("languages section is empty")
     if errors:
         sys.exit("Schema validation failed:\n  - " + "\n  - ".join(errors))
 
-# ---------------------------------------------------------------- linting
+# --------------------------------------------------------------- text layer
+# What a parser recovers from the printed document: screen-only chrome is
+# display:none at print time, so it is dropped here too.
 
-PLACEHOLDER_RX = re.compile(r"\[(?:[A-Z][^\]\n]{0,40})\]")
-TODO_RX = re.compile(r"\bTODO\b|\bFIXME\b|\bXXX\b")
+SKIP_TAGS = {"style", "script", "head", "title", "nav", "button"}
+SKIP_CLASSES = {"screen-only", "term-bar", "prompt-line", "pills", "cursor",
+                "btn-print", "hint"}
+BLOCK_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "div", "section",
+              "article", "aside", "main", "footer", "header", "tr", "ul", "ol"}
+VOID_TAGS = {"br", "img", "meta", "link", "hr", "input", "source", "area",
+             "base", "col", "embed", "param", "track", "wbr"}
 
-def lint(rendered: dict) -> list:
-    """Scan rendered text for content that should never reach a recruiter."""
-    findings = []
-    tag_rx = re.compile(r"<[^>]+>")
-    for target, html in rendered.items():
-        text = tag_rx.sub(" ", html)
-        for m in PLACEHOLDER_RX.finditer(text):
-            findings.append(f"{target}: unresolved placeholder {m.group(0)!r}")
-        for m in TODO_RX.finditer(text):
-            findings.append(f"{target}: leftover marker {m.group(0)!r}")
-    return findings
+class _TextLayer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        self._skip_depth = 0
+        self._stack = []
 
-# ---------------------------------------------------------------- macros
+    def handle_starttag(self, tag, attrs):
+        if tag in VOID_TAGS:
+            if tag == "br" and not self._skip_depth:
+                self.out.append("\n")
+            return
+        classes = set((dict(attrs).get("class") or "").split())
+        hidden = tag in SKIP_TAGS or bool(classes & SKIP_CLASSES)
+        self._stack.append(hidden)
+        if hidden:
+            self._skip_depth += 1
+        elif tag in BLOCK_TAGS and not self._skip_depth:
+            self.out.append("\n")
 
-MACRO_HEAD = """
-{% set b = r.basics %}
-{% set gh = (r.basics.profiles | selectattr('network','equalto','GitHub') | list | first) %}
-{% set li = (r.basics.profiles | selectattr('network','equalto','LinkedIn') | list | first) %}
-{% set loc = b.location.city ~ ", " ~ b.location.region ~ ", " ~ (b.location.countryCode | country) %}
-"""
+    def handle_endtag(self, tag):
+        if tag in VOID_TAGS:
+            return
+        if self._stack and self._stack.pop():
+            self._skip_depth = max(0, self._skip_depth - 1)
+        if tag in BLOCK_TAGS and not self._skip_depth:
+            self.out.append("\n")
 
-# ---------------------------------------------------------------- ATS (linear)
+    def handle_data(self, data):
+        if not self._skip_depth:
+            self.out.append(data)
 
-TPL_ATS = MACRO_HEAD + """<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<!-- generated by {{ generator }} — do not edit; edit resume.yaml -->
-<title>{{ b.name }} — Resume</title>
-<style>
-@page{margin:10mm 0;size:A4}
-body{font-family:Georgia,"Times New Roman",serif;color:#1a1a1a;font-size:10pt;
-line-height:1.25;max-width:8.27in;margin:0 auto;padding:.4in;background:#fff}
-h1{font-size:18pt;margin:0 0 1px}
-.role{color:#1a4d8f;font-family:Arial,sans-serif;font-size:11pt;font-weight:700;margin:0 0 3px}
-.contact{color:#444;font-family:Arial,sans-serif;font-size:9pt;margin:0}
-h2{font-family:Arial,sans-serif;font-size:10pt;color:#1a4d8f;text-transform:uppercase;
-letter-spacing:1.2px;border-bottom:1.25px solid #c9c9c9;padding-bottom:2px;margin:10px 0 4px}
-h3{font-size:10.5pt;margin:6px 0 0}
-.when{color:#444;font-family:Arial,sans-serif;font-style:italic;font-size:9pt;margin:0 0 2px}
-.blurb{color:#444;font-size:9.5pt;margin:0 0 3px}
-h4{font-family:Arial,sans-serif;font-size:9pt;margin:4px 0 1px}
-ul{margin:1px 0 3px;padding-left:16px}
-li{font-size:10pt;margin-bottom:1.5px}
-.sk{font-size:9.5pt;margin:1px 0}
-.sk b{font-family:Arial,sans-serif;font-size:9pt}
-p,li{orphans:3;widows:3}
-@media print{
-.card{page-break-inside:avoid}
-.allow-break{page-break-inside:auto}
-li{break-inside:avoid}
-h2{break-after:avoid-page}
-.keep{break-inside:avoid;page-break-inside:avoid}
-}
-</style></head><body>
+def text_layer(html):
+    """Approximate what a parser extracts from the printed document."""
+    p = _TextLayer()
+    p.feed(html)
+    p.close()
+    lines = [re.sub(r"[ \t\u00a0]+", " ", ln).strip()
+             for ln in "".join(p.out).split("\n")]
+    return "\n".join(ln for ln in lines if ln) + "\n"
 
-<h1>{{ b.name | upper }}</h1>
-<p class="role">{{ b.label }}</p>
-<p class="contact">{{ loc }} | {{ b.phone }} | {{ b.email }}</p>
-<p class="contact">{% if li %}LinkedIn: {{ li.url | replace('https://www.','') }}{% endif %}
-{% if gh %} | GitHub: {{ gh.url | replace('https://','') }}{% endif %}</p>
+# --------------------------------------------------------------- audit
 
-<h2>Professional Summary</h2>
-<p>{{ b.summary }}</p>
+PLACEHOLDER_RX = re.compile(r"\[(?:[A-Za-z][^\]\n]{0,40})\]")
+MARKER_RX = re.compile(r"\bTODO\b|\bFIXME\b|\bXXX\b|\bLorem ipsum\b", re.I)
+FILLER_RX = re.compile(
+    r"\b(responsible for|duties included|helped with|worked on|"
+    r"various tasks|team player|hard.?working)\b", re.I)
+PRONOUN_RX = re.compile(r"(?<=\s)(I|my|me)(?=[\s,.])")
+MONTH_ALT = "|".join(MONTHS)
+FULL_RANGE_RX = re.compile(
+    rf"(?:{MONTH_ALT}) \d{{4}} \u2013 (?:(?:{MONTH_ALT}) \d{{4}}|Present)")
+NUMERIC_DATE_RX = re.compile(r"\b\d{1,2}/\d{2,4}\b")
 
-<h2>Core Competencies</h2>
-{% for s in r.skills %}<p class="sk"><b>{{ s.name }}:</b> {{ s.keywords | join(', ') }}</p>
-{% endfor %}
-
-<h2>Work Experience</h2>
-{% for w in r.work %}
-<div class="card{% if w.subsections %} allow-break{% endif %}">
-<h3>{{ w.position }} — {{ w.name }}</h3>
-<p class="when">{{ w | daterange }}{% if w.location %} | {{ w.location }}{% endif %}</p>
-{% if w.summary %}<p class="blurb">{{ w.summary }}</p>{% endif %}
-{% if w.highlights %}<ul>{% for h in w.highlights %}<li>{{ h }}</li>{% endfor %}</ul>{% endif %}
-{% for sub in w.subsections or [] %}
-<h4>{{ sub.name }}</h4>
-<ul>{% for h in sub.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-{% endfor %}
-</div>
-{% endfor %}
-
-{% if r.volunteer %}
-{% for v in r.volunteer %}
-{% if loop.first %}<div class="keep"><h2>Volunteer Experience</h2>{% endif %}
-<div class="card">
-<h3>{{ v.position }} (Volunteer) — {{ v.organization }}</h3>
-<p class="when">{{ v | daterange }}</p>
-<ul>{% for h in v.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-</div>
-{% if loop.first %}</div>{% endif %}
-{% endfor %}
-{% endif %}
-
-{% for p in r.projects %}
-{% if loop.first %}<div class="keep"><h2>Projects</h2>{% endif %}
-<div class="card">
-<h3>{{ p.name }}</h3>
-<p class="when">{{ p | daterange }}{% if p.keywords %} | {{ p.keywords | join(', ') }}{% endif %}</p>
-<ul>{% for h in p.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-</div>
-{% if loop.first %}</div>{% endif %}
-{% endfor %}
-
-<div class="keep">
-<h2>Education</h2>
-{% for e in r.education %}
-<h3>{{ e.studyType }}, {{ e.area }}</h3>
-<p class="when">{{ e | daterange }} | {{ e.institution }} | CGPA: {{ e.score }}</p>
-{% endfor %}
-</div>
-
-{% if r.publications %}
-<div class="keep">
-<h2>Publications</h2>
-{% for p in r.publications %}
-<p>"{{ p.name }}" — {{ p.publisher }}, {{ p.releaseDate | fmtdate }}. {{ p.summary }}</p>
-{% endfor %}
-</div>
-{% endif %}
-
-<div class="keep">
-<h2>Languages</h2>
-<p>{% for l in r.languages %}{{ l.language }} ({{ l.fluency }}){% if not loop.last %} | {% endif %}{% endfor %}</p>
-</div>
-
-</body></html>
-"""
-
-# ---------------------------------------------------------------- hybrid
-# Screen: terminal. Print: original macchiato (Josefin Sans / Lato,
-# #56817A, keylines, ghostwhite chips, dotted separators, A4).
-# DOM order is ATS-linear (main content first); print swaps columns
-# visually via display:table + direction:rtl, which also keeps the
-# columns attached across page breaks (flex fragments unreliably).
-
-TPL_HYBRID = MACRO_HEAD + """<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<!-- generated by {{ generator }} — do not edit; edit resume.yaml -->
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="{{ b.name }} — {{ b.label }}. Interactive resume: terminal-themed on screen, print for the document version.">
-<title>{{ b.name }} — {{ b.label }}</title>
-<style>
-/* ── macchiato-original fonts (print face) ── */
-@font-face{font-family:'Josefin Sans';font-style:normal;font-weight:300;
-src:local('Josefin Sans Light'),local('JosefinSans-Light'),
-url(https://fonts.gstatic.com/s/josefinsans/v14/Qw3FZQNVED7rKGKxtqIqX5Ecpl5te10k.ttf) format('truetype')}
-@font-face{font-family:'Josefin Sans';font-style:normal;font-weight:700;
-src:local('Josefin Sans Bold'),local('JosefinSans-Bold'),
-url(https://fonts.gstatic.com/s/josefinsans/v14/Qw3FZQNVED7rKGKxtqIqX5Ectllte10k.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:normal;font-weight:300;
-src:local('Lato Light'),local('Lato-Light'),
-url(https://fonts.gstatic.com/s/lato/v16/S6u9w4BMUTPHh7USSwiPHA.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:normal;font-weight:400;
-src:local('Lato Regular'),local('Lato-Regular'),
-url(https://fonts.gstatic.com/s/lato/v16/S6uyw4BMUTPHjx4wWw.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:normal;font-weight:700;
-src:local('Lato Bold'),local('Lato-Bold'),
-url(https://fonts.gstatic.com/s/lato/v16/S6u9w4BMUTPHh6UVSwiPHA.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:italic;font-weight:300;
-src:local('Lato Light Italic'),local('Lato-LightItalic'),
-url(https://fonts.gstatic.com/s/lato/v16/S6u_w4BMUTPHjxsI9w2_Gwfo.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:italic;font-weight:400;
-src:local('Lato Italic'),local('Lato-Italic'),
-url(https://fonts.gstatic.com/s/lato/v16/S6u8w4BMUTPHjxsAXC-v.ttf) format('truetype')}
-@font-face{font-family:'Lato';font-style:italic;font-weight:700;
-src:local('Lato Bold Italic'),local('Lato-BoldItalic'),
-url(https://fonts.gstatic.com/s/lato/v16/S6u_w4BMUTPHjxsI5wq_Gwfo.ttf) format('truetype')}
-
-:root{--bg:#0a0e14;--panel:#11161f;--panel2:#161d29;--ink:#d6dde8;--dim:#7d8799;
---green:#7ee787;--cyan:#79c0ff;--amber:#ffbe5c;--pink:#ff7b9c;--purple:#c497ff;--rule:#232c3b;
---mono:"SF Mono","Cascadia Code",Consolas,monospace;--sans:"Segoe UI",system-ui,sans-serif;
---m-green:#56817A;--m-ink:#39424B;--m-em:#999;--m-dotted:#e0e0e0;
---m-head:"Josefin Sans",Helvetica,Arial,sans-serif;
---m-body:"Lato",Helvetica,Arial,sans-serif}
-*{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55}
-.wrap{max-width:880px;margin:0 auto;padding:40px 24px 80px}
-.print-topbar{display:none}
-.print-name{display:none}
-.term{background:var(--panel);border:1px solid var(--rule);border-radius:12px;overflow:hidden;
-box-shadow:0 18px 50px rgba(0,0,0,.5)}
-.term-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--panel2);
-border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--dim)}
-.dot{width:11px;height:11px;border-radius:50%}
-.dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
-.term-body{padding:26px 28px;font-family:var(--mono);font-size:14px}
-.prompt{color:var(--green)}
-.cursor{display:inline-block;width:8px;height:16px;background:var(--green);
-vertical-align:text-bottom;animation:blink 1.1s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
-.name{font-size:clamp(28px,5vw,44px);font-weight:800;letter-spacing:1px;color:#fff;
-margin:14px 0 2px;font-family:var(--mono)}
-.name .accent{color:var(--green)}
-.role{color:var(--cyan);font-family:var(--mono);font-size:15px;margin-bottom:14px}
-.contactline{font-family:var(--mono);font-size:12.5px;color:var(--dim)}
-.contactline a{color:var(--cyan);text-decoration:none;border-bottom:1px dashed #2c3a52}
-nav.pills{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 6px}
-nav.pills a{font-family:var(--mono);font-size:12px;color:var(--dim);border:1px solid var(--rule);
-border-radius:999px;padding:5px 13px;text-decoration:none}
-nav.pills a:hover{color:var(--green);border-color:var(--green)}
-.btn-print{font-family:var(--mono);font-size:12px;cursor:pointer;background:var(--green);
-color:#08210e;border:none;border-radius:999px;padding:6px 14px;font-weight:700}
-
-.cols{display:flex;flex-direction:column}
-.side,.main,.keep{display:contents}
-{% for i in range(1,9) %}.o{{ i }}{order:{{ i }}}{% endfor %}
-
-section{margin-top:44px;scroll-margin-top:20px}
-h2.sec{font-family:var(--mono);font-size:14px;color:var(--pink);letter-spacing:1px;margin-bottom:16px}
-h2.sec::before{content:"## ";color:var(--dim)}
-h2.sec::after{content:"";display:block;height:1px;margin-top:8px;
-background:linear-gradient(90deg,var(--rule),transparent)}
-.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
-padding:20px 22px;margin-bottom:14px;transition:transform .2s,border-color .2s}
-.card:hover{transform:translateY(-3px);border-color:#33507a}
-.erow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
-.card h3{font-size:16px;color:#fff}
-.card h3 .at{color:var(--dim);font-weight:400}
-.dates{font-family:var(--mono);font-size:11.5px;color:var(--amber)}
-.blurb{color:var(--dim);font-size:13.5px;margin:4px 0 10px}
-.sub{font-family:var(--mono);font-size:12px;color:var(--purple);margin:12px 0 5px}
-.card ul{padding-left:18px}
-.card li{font-size:13.5px;margin-bottom:5px}
-.card li::marker{color:var(--green)}
-.chips{display:flex;flex-wrap:wrap;gap:7px;margin:6px 0 4px}
-.chip{font-family:var(--mono);font-size:11.5px;color:var(--cyan);background:#0d2138;
-border:1px solid #1d3d5f;border-radius:6px;padding:3px 9px}
-.group{margin-bottom:12px}
-.group h3{font-family:var(--mono);font-size:12px;color:var(--amber);font-weight:400;margin-bottom:4px}
-.plainlist{font-size:13.5px}
-.plainlist i{color:var(--dim)}
-footer{margin-top:60px;text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--dim)}
-footer .hint{color:var(--amber)}
-
-@media (prefers-reduced-motion: reduce){
-.cursor{animation:none}
-.card{transition:none}
-.card:hover{transform:none}
+ORDER = {
+    "ats": ["Professional Summary", "Core Competencies", "Work Experience",
+            ENGAGEMENTS_HEADING, "Projects", "Education", "Publications",
+            "Languages"],
+    "hybrid": ["Summary", "Experience", ENGAGEMENTS_HEADING, "Projects",
+               "Skills", "Education", "Publication", "Languages"],
 }
 
-/* ════════════════════════════════════════════════════════════
-   PRINT — original macchiato.
-   ════════════════════════════════════════════════════════════ */
-@media print{
-@page{margin:10mm 0;size:A4}
-body{background:#fff;color:var(--m-ink);font-family:var(--m-body);
-font-weight:400;letter-spacing:.3px;line-height:1.45}
-.wrap{max-width:100%;padding:0}
-.screen-only,.term-bar,nav.pills,.btn-print,.cursor,.prompt-line,footer .hint{display:none!important}
-.print-name{display:inline}
-.print-topbar{display:block;height:10px;background:var(--m-green);
--webkit-print-color-adjust:exact;print-color-adjust:exact}
-.term{background:none;border:none;box-shadow:none;border-radius:0}
-.term-body{padding:22px 22px 6px 34px;font-family:var(--m-body)}
-.name{font-family:var(--m-head);font-weight:700;font-size:40px;letter-spacing:1px;
-color:var(--m-ink);margin:0}
-.name .accent{color:var(--m-ink)}
-.role{font-family:var(--m-head);font-weight:300;font-size:16px;letter-spacing:.5px;
-color:var(--m-ink);margin:2px 0 8px}
-.contactline{font-family:var(--m-body);font-size:11px;color:var(--m-ink);overflow-wrap:anywhere}
-.contactline a{color:var(--m-ink);border:none;text-decoration:none}
+def dated_entry_count(r):
+    """How many complete written date ranges the text layer must contain."""
+    n = len(r.get("work") or []) + len(r.get("volunteer") or [])
+    n += len(r.get("education") or []) + len(r.get("projects") or [])
+    return n  # engagements are undated by design
 
-/* columns: table + rtl = ATS-linear DOM, sidebar visually left,
-   cells stay attached across page breaks */
-.cols{display:table;width:100%;direction:rtl;padding:0 22px 0 34px}
-.main{display:table-cell;direction:ltr;vertical-align:top;width:auto}
-.side{display:table-cell;direction:ltr;vertical-align:top;width:160px;padding-right:20px}
-{% for i in range(1,9) %}.o{{ i }}{order:0}{% endfor %}
+def audit_text_layer(target, text, r):
+    """The ATS contract. Findings here fail --check."""
+    f = []
+    for m in PLACEHOLDER_RX.finditer(text):
+        f.append(f"{target}: unresolved placeholder {m.group(0)!r}")
+    for m in MARKER_RX.finditer(text):
+        f.append(f"{target}: leftover marker {m.group(0)!r}")
+    for m in FILLER_RX.finditer(text):
+        f.append(f"{target}: filler phrase {m.group(0)!r} (say what changed instead)")
+    for m in PRONOUN_RX.finditer(text):
+        f.append(f"{target}: first-person pronoun {m.group(0)!r}")
 
-section{margin-top:0;margin-bottom:12px}
-.side section{break-inside:avoid;page-break-inside:avoid}
-.keep{display:block;break-inside:avoid;page-break-inside:avoid}
-h2.sec{font-family:var(--m-head);font-weight:300;font-size:16px;letter-spacing:.5px;
-color:var(--m-ink);margin:0 0 2px;break-after:avoid-page}
-h2.sec::before{content:""}
-h2.sec::after{content:"";display:block;width:45px;height:0;
-border-top:1px solid var(--m-green);margin:8px 0 10px;background:none;
--webkit-print-color-adjust:exact;print-color-adjust:exact}
-.card{background:none;border:none;border-radius:0;padding:0;margin:0 0 10px;
-page-break-inside:avoid;transform:none}
-.card.allow-break{page-break-inside:auto}
-.main .card + .card,.main .keep + .card{padding-top:8px;border-top:1px dotted var(--m-dotted)}
-.card h3{font-family:var(--m-body);font-weight:700;font-size:13px;color:var(--m-ink)}
-.card h3 .at{color:var(--m-ink);font-weight:300;font-size:12px}
-.dates{font-family:var(--m-body);font-style:italic;font-size:10px;color:var(--m-em);white-space:nowrap}
-.blurb{font-family:var(--m-body);font-style:italic;font-size:10.5px;color:var(--m-em);margin:1px 0 4px}
-.sub{font-family:var(--m-body);font-weight:700;font-size:11px;color:var(--m-ink);margin:7px 0 1px}
-.card ul{margin:3px 0 0;padding-left:18px}
-.card li{font-size:11px;line-height:1.4;margin-bottom:2px;padding-left:4px;color:var(--m-ink);
-break-inside:avoid;orphans:3;widows:3}
-.card li::marker{color:var(--m-green);-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.chips{gap:0;margin:2px 0 3px}
-.chip{font-family:var(--m-body);font-size:9px;color:var(--m-ink);background:ghostwhite;
-border:none;border-radius:5px;margin:.15em;padding:.15em .4em;
--webkit-print-color-adjust:exact;print-color-adjust:exact}
-.group{margin-bottom:9px}
-.group h3{font-family:var(--m-body);font-size:10px;font-weight:700;color:var(--m-ink);margin:0 0 2px}
-.plainlist{font-size:10px;line-height:1.6;color:var(--m-ink)}
-.plainlist i{color:var(--m-em);font-size:9.5px}
-footer{margin:8px 22px 0 34px;text-align:left;font-size:9px;color:var(--m-em);font-family:var(--m-body)}
-}
-</style></head><body>
-<div class="wrap">
-<div class="print-topbar"></div>
+    lines = text.splitlines()
+    head = "\n".join(lines[:6])
+    b = r["basics"]
+    if b["name"].upper() not in head.upper():
+        f.append(f"{target}: name is not in the first 6 extracted lines")
+    for field in ("phone", "email"):
+        if b[field] not in head:
+            f.append(f"{target}: {field} is not in the first 6 extracted lines")
 
-<div class="term">
-<div class="term-bar screen-only"><span class="dot r"></span><span class="dot y"></span>
-<span class="dot g"></span><span style="margin-left:8px">arnav@pune:~/resume — zsh</span></div>
-<div class="term-body">
-<div class="prompt-line screen-only"><span class="prompt">➜ ~/resume</span>
- cat resume.yaml | render --target=$MEDIUM<span class="cursor"></span></div>
-<div class="name">{{ b.name.split(' ')[0] | upper }} <span class="accent">{{ b.name.split(' ')[1:] | join(' ') | upper }}</span></div>
-<div class="role">{{ b.label }}</div>
-<p class="contactline">{{ loc }} · {{ b.phone }} · {{ b.email }}</p>
-<p class="contactline">{% if li %}LinkedIn: <a href="{{ li.url }}">{{ li.url | replace('https://www.','') }}</a>{% endif %}
-{% if gh %} · GitHub: <a href="{{ gh.url }}">{{ gh.url | replace('https://','') }}</a>{% endif %}</p>
-<nav class="pills screen-only"><a href="#exp">experience</a><a href="#skills">skills</a>
-{% if r.volunteer %}<a href="#volunteer">volunteer</a>{% endif %}<a href="#projects">projects</a>
-<a href="#edu">education</a>
-<button class="btn-print" onclick="window.print()" aria-label="Print resume as PDF">⎙ print → macchiato PDF</button></nav>
-</div></div>
+    # Headings occupy a line of their own in the text layer. Match whole lines,
+    # never substrings: "Educational Loan product" is not the Education
+    # section, and a "Languages:" skill group is not the Languages section.
+    heads = {}
+    for i, line in enumerate(lines):
+        heads.setdefault(line.strip().rstrip(":"), i)
+    pos = -1
+    for heading in ORDER.get(target, []):
+        at = heads.get(heading)
+        if at is None:
+            f.append(f"{target}: section {heading!r} missing from text layer")
+            continue
+        if at < pos:
+            f.append(f"{target}: section {heading!r} is out of linear order")
+        pos = at
 
-<!-- DOM ORDER = ATS EXTRACTION ORDER. Print swaps columns visually
-     via direction:rtl, never in the content stream. -->
-<div class="cols">
+    expected = dated_entry_count(r)
+    found = len(FULL_RANGE_RX.findall(text))
+    if found < expected:
+        f.append(f"{target}: {found} complete date ranges, expected {expected} "
+                 "(a clipped or partial date is an unparseable date)")
+    for m in NUMERIC_DATE_RX.finditer(text):
+        f.append(f"{target}: numeric date {m.group(0)!r} - write it out in full")
+    return f
 
-<main class="main">
+# --------------------------------------------------------------- json resume
 
-<section class="o1" id="summary"><h2 class="sec">Summary</h2>
-<div class="card"><ul style="list-style:none;padding:0"><li>{{ b.summary }}</li></ul></div></section>
+def to_json_resume(r, now=None):
+    """Export as JSON Resume v1.0.0 so the content is not trapped in this repo."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    out = {"$schema": SCHEMA_URL, "basics": json.loads(json.dumps(r["basics"]))}
 
-<section class="o3" id="exp"><h2 class="sec">Experience</h2>
-{% for w in r.work %}
-<div class="card{% if w.subsections %} allow-break{% endif %}">
-<div class="erow"><h3>{{ w.position }} <span class="at">· {{ w.name }}</span></h3>
-<span class="dates">{{ w | daterange }}</span></div>
-{% if w.summary %}<p class="blurb">{{ w.summary }}</p>{% endif %}
-{% if w.highlights %}<ul>{% for h in w.highlights %}<li>{{ h }}</li>{% endfor %}</ul>{% endif %}
-{% for sub in w.subsections or [] %}
-<div class="sub">{{ sub.name }}</div>
-{% if sub.keywords %}<div class="chips">{% for k in sub.keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>{% endif %}
-<ul>{% for h in sub.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-{% endfor %}
-</div>
-{% endfor %}
-</section>
+    work = []
+    for w in r.get("work") or []:
+        item = {k: w[k] for k in
+                ("name", "position", "location", "url", "startDate", "endDate", "summary")
+                if w.get(k)}
+        highlights = list(w.get("highlights") or [])
+        for sub in w.get("subsections") or []:
+            highlights += [f"{sub['name']}: {h}" for h in sub.get("highlights") or []]
+        item["highlights"] = highlights
+        if w.get("subsections"):
+            item["x_subsections"] = w["subsections"]
+        work.append(item)
+    out["work"] = work
 
-{% if r.volunteer %}
-<section class="o4" id="volunteer">
-{% for v in r.volunteer %}
-{% if loop.first %}<div class="keep"><h2 class="sec">Volunteer</h2>{% endif %}
-<div class="card">
-<div class="erow"><h3>{{ v.position }} <span class="at">· {{ v.organization }}</span></h3>
-<span class="dates">{{ v | daterange }}</span></div>
-<ul>{% for h in v.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-</div>
-{% if loop.first %}</div>{% endif %}
-{% endfor %}
-</section>
-{% endif %}
+    if r.get("volunteer"):
+        out["volunteer"] = [
+            {**{k: v[k] for k in ("organization", "position", "url", "startDate",
+                                  "endDate", "summary", "highlights") if v.get(k)},
+             "x_tag": VOLUNTEER_TAG}
+            for v in r["volunteer"]]
 
-<section class="o5" id="projects">
-{% for p in r.projects %}
-{% if loop.first %}<div class="keep"><h2 class="sec">Open Source Projects</h2>{% endif %}
-<div class="card">
-<div class="erow"><h3>{{ p.name }}</h3><span class="dates">{{ p | daterange }}</span></div>
-{% if p.keywords %}<div class="chips">{% for k in p.keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>{% endif %}
-<ul>{% for h in p.highlights %}<li>{{ h }}</li>{% endfor %}</ul>
-</div>
-{% if loop.first %}</div>{% endif %}
-{% endfor %}
-</section>
+    projects = []
+    for en in r.get("engagements") or []:
+        # projects[] carries entity/roles/type in the upstream schema
+        # precisely for client work, so no extension is needed here.
+        item = {
+            "name": en["client"],
+            "entity": en["client"],
+            "type": "freelance engagement",
+            "roles": [en["role"]],
+            "description": " ".join(
+                s.strip() for s in (en.get("clientProfile"), en.get("mandate")) if s),
+            "highlights": list(en.get("highlights") or []),
+        }
+        if en.get("outcome"):
+            item["highlights"].append(f"Outcome: {en['outcome'].strip()}")
+        if en.get("keywords"):
+            item["keywords"] = en["keywords"]
+        if en.get("url"):
+            item["url"] = en["url"]
+        for k in ("capacity", "duration", "status"):
+            if en.get(k):
+                item[f"x_{k}"] = en[k]
+        projects.append(item)
+    for p in r.get("projects") or []:
+        item = {k: p[k] for k in
+                ("name", "description", "url", "startDate", "endDate",
+                 "keywords", "highlights") if p.get(k)}
+        item["type"] = "personal project"
+        projects.append(item)
+    out["projects"] = projects
 
-</main>
+    for key in ("education", "publications", "skills", "languages", "awards",
+                "certificates", "interests", "references"):
+        if r.get(key):
+            out[key] = r[key]
 
-<aside class="side">
+    out["meta"] = {
+        "canonical": r["basics"]["url"].rstrip("/") + "/resume.json",
+        "version": "v1.0.0",
+        "lastModified": now.replace(microsecond=0).isoformat(),
+        "generator": GENERATOR,
+        "x_note": ("engagements[] are paid contracts, exported as projects[] "
+                   f"with type='freelance engagement'; volunteer[] renders "
+                   f"inside Experience tagged '{VOLUNTEER_TAG}'."),
+    }
+    return out
 
-<section class="o2" id="skills"><h2 class="sec">Skills</h2><div class="card">
-{% for s in r.skills %}
-<div class="group"><h3><span class="screen-only">{{ s.name | lower | replace(' & ','_') | replace(' ','_') }}:</span><span class="print-name">{{ s.name }}</span></h3>
-<div class="chips">{% for k in s.keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div></div>
-{% endfor %}
-</div></section>
+# --------------------------------------------------------------- pdf
 
-<section class="o6" id="edu"><h2 class="sec">Education</h2>
-{% for e in r.education %}<div class="card">
-<div class="erow"><h3>{{ e.studyType }} <span class="at">— {{ e.area }}</span></h3></div>
-<div class="plainlist">{{ e.institution }}<br>
-<i>{{ e | daterange }}</i> · CGPA: {{ e.score }}</div>
-</div>{% endfor %}</section>
+CHROME_CANDIDATES = (
+    "chrome", "google-chrome", "google-chrome-stable", "chromium",
+    "chromium-browser", "msedge",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
 
-{% if r.publications %}
-<section class="o7"><h2 class="sec">Publication</h2>
-{% for p in r.publications %}<div class="card"><div class="plainlist">
-"{{ p.name }}" — {{ p.publisher }}, {{ p.releaseDate | fmtdate }}</div></div>{% endfor %}
-</section>{% endif %}
+def find_browser():
+    env_path = os.environ.get("CHROME_PATH")
+    if env_path and pathlib.Path(env_path).exists():
+        return env_path
+    for cand in CHROME_CANDIDATES:
+        found = shutil.which(cand) or (cand if pathlib.Path(cand).exists() else None)
+        if found:
+            return found
+    return None
 
-<section class="o8"><h2 class="sec">Languages</h2><div class="card"><div class="plainlist">
-{% for l in r.languages %}{{ l.language }} <i>({{ l.fluency }})</i>{% if not loop.last %}<br>{% endif %}{% endfor %}
-</div></div></section>
+def render_pdf(browser, html_path, pdf_path):
+    """Print a target to PDF headlessly.
 
-</aside>
+    The print stylesheet deliberately uses borders rather than background
+    fills for structural colour, so the output matches a manual Ctrl+P even
+    though headless Chrome prints without background graphics.
+    """
+    pdf_path.unlink(missing_ok=True)
+    cmd = [browser, "--headless=new", "--disable-gpu", "--no-sandbox",
+           "--no-pdf-header-footer", "--virtual-time-budget=4000",
+           f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"headless render failed for {html_path.name}: "
+                           + " | ".join(tail))
+    return pdf_path
 
-</div>
+# --------------------------------------------------------------- link audit
 
-<footer><span class="hint">// hint: Ctrl+P re-renders this page as a macchiato document.
-view-source is welcome.</span><br>{{ b.name }} — {{ b.email }}</footer>
-</div></body></html>
-"""
+def collect_urls(r):
+    urls = {}
 
-# ---------------------------------------------------------------- main
+    def add(url, where):
+        if url:
+            urls.setdefault(url, where)
 
-def main():
-    ap = argparse.ArgumentParser(description="resume.yaml -> HTML")
-    ap.add_argument("--src", default="resume.yaml")
-    ap.add_argument("--out", default="dist")
-    ap.add_argument("--only", choices=["hybrid", "ats"])
-    ap.add_argument("--check", action="store_true",
-                    help="lint rendered output; exit 1 on placeholders (CI gate)")
-    args = ap.parse_args()
+    b = r.get("basics") or {}
+    add(b.get("url"), "basics.url")
+    for p in b.get("profiles") or []:
+        add(p.get("url"), f"profiles[{p.get('network')}]")
+    for key, label in (("work", "name"), ("engagements", "client"),
+                       ("volunteer", "organization"), ("projects", "name"),
+                       ("publications", "name"), ("education", "institution")):
+        for item in r.get(key) or []:
+            add(item.get("url"), f"{key}[{item.get(label, '?')}]")
+    return urls
 
-    src = pathlib.Path(args.src)
+# Sites that block automated HEAD/GET but are fine in a browser.
+SOFT_STATUS = {401, 403, 405, 429, 999}
+
+def check_links(r, timeout=20):
+    import urllib.error
+    import urllib.request
+
+    hard, soft = [], []
+    for url, where in collect_urls(r).items():
+        req = urllib.request.Request(url, method="HEAD", headers={
+            "User-Agent": "Mozilla/5.0 (resume-as-code link audit)"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                code = resp.status
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+            if code in SOFT_STATUS or code == 501:  # HEAD unsupported -> retry
+                try:
+                    req.method = "GET"
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        code = resp.status
+                except urllib.error.HTTPError as exc2:
+                    code = exc2.code
+                except Exception as exc2:  # noqa: BLE001 - network is messy
+                    soft.append(f"{where}: {url} unverifiable ({exc2})")
+                    continue
+        except Exception as exc:  # noqa: BLE001
+            hard.append(f"{where}: {url} unreachable ({exc})")
+            continue
+        if 200 <= code < 400:
+            say(f"  {OK} {code} {url}")
+        elif code in SOFT_STATUS:
+            soft.append(f"{where}: {url} returned {code} (bot-blocked, verify by hand)")
+        else:
+            hard.append(f"{where}: {url} returned {code}")
+    return hard, soft
+
+# --------------------------------------------------------------- build
+
+def build(src=ROOT / "resume.yaml", out=ROOT / "dist", only=None,
+          template_dir=TEMPLATE_DIR):
+    """Render every artifact. Returns {'html': {...}, 'text': {...}, 'data': r}."""
+    src, out = pathlib.Path(src), pathlib.Path(out)
     if not src.exists():
-        sys.exit(f"{args.src} not found")
+        sys.exit(f"{src} not found")
     data = yaml.safe_load(src.read_text(encoding="utf-8"))
     validate(data)
+    out.mkdir(parents=True, exist_ok=True)
 
-    out = pathlib.Path(args.out)
-    out.mkdir(exist_ok=True)
-    e = env()
+    e = jinja_env(template_dir)
+    ctx = context(data)
+    targets = {only: TARGETS[only]} if only else dict(TARGETS)
 
-    targets = {"hybrid": ("index.html", TPL_HYBRID), "ats": ("ats.html", TPL_ATS)}
-    if args.only:
-        targets = {args.only: targets[args.only]}
+    html, text = {}, {}
+    for name, (fname, tpl, txt_name) in targets.items():
+        rendered = e.get_template(tpl).render(**ctx)
+        (out / fname).write_text(rendered, encoding="utf-8")
+        html[name] = rendered
+        text[name] = text_layer(rendered)
+        (out / txt_name).write_text(text[name], encoding="utf-8")
+        say(f"{OK} {name:6s} {DASH} {out / fname}  (+ {txt_name})")
 
-    rendered = {}
-    for name, (fname, tpl) in targets.items():
-        html = e.from_string(tpl).render(r=data, generator=GENERATOR)
-        (out / fname).write_text(html, encoding="utf-8")
-        rendered[name] = html
-        print(f"✓ {name:6s} -> {out / fname}")
+    payload = to_json_resume(data)
+    (out / "resume.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    say(f"{OK} json   {DASH} {out / 'resume.json'}")
+    return {"html": html, "text": text, "data": data, "out": out}
 
-    findings = lint(rendered)
+# --------------------------------------------------------------- main
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="resume.yaml -> dist/")
+    ap.add_argument("--src", default=str(ROOT / "resume.yaml"))
+    ap.add_argument("--out", default=str(ROOT / "dist"))
+    ap.add_argument("--only", choices=sorted(TARGETS))
+    ap.add_argument("--check", action="store_true",
+                    help="audit the extracted text layer; exit 1 on findings (CI gate)")
+    ap.add_argument("--pdf", action="store_true",
+                    help="also render PDFs with headless Chrome/Edge")
+    ap.add_argument("--links", action="store_true",
+                    help="audit every URL on the resume (needs network)")
+    args = ap.parse_args(argv)
+
+    result = build(args.src, args.out, args.only)
+    out = result["out"]
+    hard_error = False      # always fatal: the thing you asked for did not work
+    contract_failed = False  # fatal under --check: the document is not shippable
+
+    if args.pdf:
+        browser = find_browser()
+        if not browser:
+            say(f"{WARN} no Chrome/Edge/Chromium found; set CHROME_PATH to render PDFs")
+            hard_error = True
+        else:
+            names = pdf_names(result["data"])
+            for name in result["html"]:
+                pdf = out / names[name]
+                try:
+                    render_pdf(browser, out / TARGETS[name][0], pdf)
+                    kb = pdf.stat().st_size // 1024
+                    say(f"{OK} pdf    {DASH} {pdf} ({kb} KB)")
+                except Exception as exc:  # noqa: BLE001
+                    say(f"{WARN} {exc}")
+                    hard_error = True
+
+    findings = []
+    for name, text in result["text"].items():
+        findings += audit_text_layer(name, text, result["data"])
     if findings:
-        print("\n⚠ content lint:")
+        say(f"\n{WARN} ATS contract violations:")
         for f in findings:
-            print(f"  - {f}")
-        if args.check:
-            sys.exit(1)
-    elif args.check:
-        print("✓ lint clean")
+            say(f"  - {f}")
+        contract_failed = True
+    else:
+        say(f"{OK} ats contract: text layer is linear, dated and placeholder-free")
 
-    print("\nNext: open dist/index.html | Ctrl+P for the macchiato PDF")
-    print("      upload dist/ats.html print-out to job portals")
+    if args.links:
+        say("\nlink audit:")
+        hard, soft = check_links(result["data"])
+        for s in soft:
+            say(f"{WARN} {s}")
+        for h in hard:
+            say(f"{WARN} dead link {DASH} {h}")
+        if hard:
+            hard_error = True
+        elif not soft:
+            say(f"{OK} every URL on the resume resolves")
+
+    if hard_error or (args.check and contract_failed):
+        say(f"\n{WARN} build finished with failures")
+        return 1
+    ats_pdf = pdf_names(result["data"])["ats"]
+    say(f"\nNext: open {out / 'index.html'} | Ctrl+P for the macchiato PDF")
+    say(f"      send {out / TARGETS['ats'][0]} (or {ats_pdf}) to job portals")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
